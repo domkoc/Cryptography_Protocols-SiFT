@@ -177,7 +177,7 @@ class SiFT_LOGIN:
         # processing login response
         login_res_struct = self.parse_login_res(msg_payload)
 
-        # checking request_hash receiveid in the login response
+        # checking request_hash received in the login response
         if login_res_struct['request_hash'] != request_hash:
             raise SiFT_LOGIN_Error('Verification of login response failed')
 
