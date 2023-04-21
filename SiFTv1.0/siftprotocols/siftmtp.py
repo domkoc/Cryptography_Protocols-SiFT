@@ -16,12 +16,15 @@ class SiFT_MTP:
 	def __init__(self, peer_socket):
 		self.DEBUG = True
 		# --------- CONSTANTS ------------
-		self.rcvsqnfile = 'rcvsqn.txt'
-		self.sndsqnfile = 'sndsqn.txt'
-		self.rcvkeyfile = 'rcvkey.txt'
-		self.sndkeyfile = 'sndkey.txt'
+		# self.rcvsqnfile = 'rcvsqn.txt'
+		# self.sndsqnfile = 'sndsqn.txt'
+		# self.rcvkeyfile = 'rcvkey.txt'
+		# self.sndkeyfile = 'sndkey.txt'
+		self.rcvsqn = 0
+		self.sndsqn = 0
 		self.rsaprivfile = 'id_rsa'
 		self.rsapubfile = 'id_rsa.pub'
+		self.transfer_key = b''
 		self.start_sqn = b'\x00\x01'
 		self.version_major = 1
 		self.version_minor = 0
@@ -62,6 +65,9 @@ class SiFT_MTP:
 		parsed_msg_hdr['rnd'], i = msg_hdr[i:i+self.size_msg_hdr_rnd], i+self.size_msg_hdr_rnd
 		parsed_msg_hdr['rsv'], i = msg_hdr[i:i+self.size_msg_hdr_rsv], i+self.size_msg_hdr_rsv
 		return parsed_msg_hdr
+
+	def set_transfer_key(self, transfer_key):
+		self.transfer_key = transfer_key
 
 	# receives n bytes from the peer socket
 	def receive_bytes(self, n):
@@ -104,8 +110,9 @@ class SiFT_MTP:
 				raise SiFT_MTP_Error('Invalid sequence number found in message header')
 		else:
 			# read the content of the state file
-			with open(self.rcvsqnfile, 'rt') as sf:
-				rcvsqn = int(sf.readline(), base=10)  # type should be integer
+			rcvsqn = self.rcvsqn
+			# with open(self.rcvsqnfile, 'rt') as sf:
+			# 	rcvsqn = int(sf.readline(), base=10)  # type should be integer
 			if int.from_bytes(parsed_msg_hdr['sqn'], byteorder='big') <= rcvsqn:
 				raise SiFT_MTP_Error('Invalid sequence number found in message header')
 
@@ -127,14 +134,15 @@ class SiFT_MTP:
 				keypair = self.load_keypair(self.rsaprivfile)
 				rsa_cipher = PKCS1_OAEP.new(keypair)
 				key = rsa_cipher.decrypt(msg_etk)
-				with open(self.rcvkeyfile, 'w+t') as sf:
-					sf.write(key.hex())
+				self.transfer_key = key
+				# with open(self.rcvkeyfile, 'w+t') as sf:
+				# 	sf.write(key.hex())
 			except SiFT_MTP_Error as e:
 				raise SiFT_MTP_Error('Unable to receive message etk --> ' + e.err_msg)
 		else:
-			# read the content of the state file
-			with open(self.rcvkeyfile, 'rt') as sf:
-				key = bytes.fromhex(sf.readline())  # type should be byte string
+			key = self.transfer_key
+			# with open(self.rcvkeyfile, 'rt') as sf:
+			# 	key = bytes.fromhex(sf.readline())  # type should be byte string
 
 		if len(msg_body) != msg_len - self.size_msg_hdr - self.size_msg_mac:
 			raise SiFT_MTP_Error('Incomplete message body received')
@@ -149,8 +157,9 @@ class SiFT_MTP:
 			raise SiFT_MTP_Error('Unable to verify mac')
 
 		# update the sequence number
-		with open(self.rcvsqnfile, 'wt') as sf:
-			sf.write(str(int.from_bytes(parsed_msg_hdr['sqn'], byteorder='big')))
+		self.rcvsqn = int.from_bytes(parsed_msg_hdr['sqn'], byteorder='big')
+		# with open(self.rcvsqnfile, 'wt') as sf:
+		# 	sf.write(str(int.from_bytes(parsed_msg_hdr['sqn'], byteorder='big')))
 
 		# DEBUG
 		if self.DEBUG:
@@ -175,11 +184,13 @@ class SiFT_MTP:
 		msg_etk = b''
 		if msg_type == self.type_login_req:
 			msg_hdr_sqn = self.start_sqn
-			with open(self.sndsqnfile, 'w+t') as sf:
-				sf.write(str(int.from_bytes(msg_hdr_sqn, byteorder='big')))
+			self.sndsqn = int.from_bytes(msg_hdr_sqn, byteorder='big')
+			# with open(self.sndsqnfile, 'w+t') as sf:
+			# 	sf.write(str(int.from_bytes(msg_hdr_sqn, byteorder='big')))
 			tk = Random.get_random_bytes(32)
-			with open(self.sndkeyfile, 'w+t') as sf:
-				sf.write(tk.hex())
+			self.transfer_key = tk
+			# with open(self.sndkeyfile, 'w+t') as sf:
+			# 	sf.write(tk.hex())
 			# load the public key from the public key file and
 			# create an RSA cipher object
 			pubkey = self.load_publickey(self.rsapubfile)
@@ -187,9 +198,9 @@ class SiFT_MTP:
 			# encrypt the AES key with the RSA cipher
 			msg_etk = rsa_cipher.encrypt(tk)
 		else:
-			# read the content of the state file
-			with open(self.sndsqnfile, 'rt') as sf:
-				sndsqn = int(sf.readline(), base=10)  # type should be integer
+			sndsqn = self.sndsqn
+			# with open(self.sndsqnfile, 'rt') as sf:
+			# 	sndsqn = int(sf.readline(), base=10)  # type should be integer
 			# build message header
 			msg_hdr_sqn = (sndsqn + 1).to_bytes(2, byteorder='big')  # next message sequence number (encoded on 4 bytes)
 
@@ -200,8 +211,9 @@ class SiFT_MTP:
 		msg_hdr = self.msg_hdr_ver + msg_type + msg_hdr_len + msg_hdr_sqn + msg_hdr_rnd + msg_hdr_rsv
 
 		# read the content of the state file
-		with open(self.sndkeyfile, 'rt') as sf:
-			key = bytes.fromhex(sf.readline())  # type should be byte string
+		key = self.transfer_key
+		# with open(self.sndkeyfile, 'rt') as sf:
+		# 	key = bytes.fromhex(sf.readline())  # type should be byte string
 
 		# encrypt the payload and compute the authentication tag over the header and the payload
 		# with AES in GCM mode using nonce = header_sqn + header_rnd
@@ -226,8 +238,9 @@ class SiFT_MTP:
 			raise SiFT_MTP_Error('Unable to send message to peer --> ' + e.err_msg)
 
 		# update the sequence number
-		with open(self.sndsqnfile, 'wt') as sf:
-			sf.write(str(int.from_bytes(msg_hdr_sqn, byteorder='big')))
+		self.sndsqn = int.from_bytes(msg_hdr_sqn, byteorder='big')
+		# with open(self.sndsqnfile, 'wt') as sf:
+		# 	sf.write(str(int.from_bytes(msg_hdr_sqn, byteorder='big')))
 
 	# loads the RSA public key from file
 	def load_publickey(self, pubkeyfile):
