@@ -23,7 +23,8 @@ class SiFT_MTP:
 		self.rcvsqn = 0
 		self.sndsqn = 0
 		self.rsaprivfile = 'id_rsa'
-		self.rsapubfile = 'id_rsa.pub'
+		#self.rsapubfile = 'id_rsa.pub'
+		self.rsapubfile = 'srvpubkey.txt'
 		self.transfer_key = b''
 		self.start_sqn = b'\x00\x01'
 		self.version_major = 1
@@ -206,7 +207,7 @@ class SiFT_MTP:
 
 		msg_hdr_rnd = Random.get_random_bytes(6)
 		msg_hdr_rsv = b'\x00\x00'
-		msg_size = self.size_msg_hdr + len(msg_payload) + self.size_msg_mac
+		msg_size = self.size_msg_hdr + len(msg_payload) + self.size_msg_mac + len(msg_etk)
 		msg_hdr_len = msg_size.to_bytes(self.size_msg_hdr_len, byteorder='big')
 		msg_hdr = self.msg_hdr_ver + msg_type + msg_hdr_len + msg_hdr_sqn + msg_hdr_rnd + msg_hdr_rsv
 
@@ -226,8 +227,8 @@ class SiFT_MTP:
 		if self.DEBUG:
 			print('MTP message to send (' + str(msg_size) + '):')
 			print('HDR (' + str(len(msg_hdr)) + '): ' + msg_hdr.hex())
-			print('BDY (' + str(len(msg_payload)) + '): ')
-			print(msg_payload.hex())
+			print('BDY (' + str(len(msg_payload + authtag + msg_etk)) + '): ')
+			print((msg_hdr + encrypted_payload + authtag + msg_etk).hex())
 			print('------------------------------------------')
 		# DEBUG
 
