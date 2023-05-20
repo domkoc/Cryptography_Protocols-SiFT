@@ -13,12 +13,12 @@ The clients and the server communicate via a network and execute the above comma
 The server mustn't know the content of the messages. 
 
 ## Overview of sub-protocols
-The chat protocol has the following sub-protocols: Message Transfer Protocol (MTP), Init Protocol and Close Protocol. The following figure shows how these sub-protocols are related to each other: 
+The chat protocol has the following sub-protocols: Message Transfer Protocol (MTP), Init Protocol, Close Protocol and Status Protocol. The following figure shows how these sub-protocols are related to each other: 
 
 ```
-  +--------------+  +-----------------+    
-  |Init Protocol |  | Close Protocol  |  
-  +--------------+  +-----------------+    
+  +---------------------+   +----------------------+  +-----------------------+   
+  |    Init Protocol    |   |    Close Protocol    |  |    Status Protocol    |
+  +---------------------+   +----------------------+  +-----------------------+    
   +---------------------------------------------------------------------------+
   |                     Message Transfer Protocol (MTP)                       |
   +---------------------------------------------------------------------------+
@@ -54,7 +54,7 @@ All MTP messages has the following format:
 	+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
 ```
 
-SiFT v1.0 MTP messages have a 16-byte header that consists of the following fields:
+Messages have a 24-byte header that consists of the following fields:
 
 - __ver__: A 2-byte _version number_ field, where the first byte is the major version and the second byte is the minor version. 
 - __typ__: A 2-byte _message type_ field that specifies the type of the payload in the message. The following message types are supported:
@@ -76,49 +76,61 @@ SiFT v1.0 MTP messages have a 16-byte header that consists of the following fiel
 The header is followed by the AES-GCM enrcrypted payload (__epd__) and the AES-GCM authentication tag (__mac__). The mac field in this version of the protocol must be 12 bytes long.  
 
 ### Processing
-When a TCP connection is established by the client to the server (serving clients on TCP port 5150), the first message the client must send is a login request (type `00 00`) message. For building the MTP message that carries the login request, it generates a fresh 6-byte random value r and a fresh 32-byte random temporary key tk using a cryptographic random number generator. It fills in the message header fields as follows:
-- ver = `01 00`
-- typ = `00 00`
-- len is calculated as the sum of the length of the header (16), the length of the encrypted payload (same as the length of the payload), the length of the mac field (12), and the length of the encrypted temporary key (256)
-- sqn = `00 01` (i.e., message sequence numbering is started from 1) 
-- rnd = r (i.e., the 6-byte fresh random value generated before)
-- rsv = `00 00`
+If the type of the message is message request(`02 00`) or message response(`02 10`) then the server should not know the content. In other words the server is not the destination.
 
-It then encrypts the payload of the login request and produces an  authentication tag on the message header and the encrypted payload using AES in GCM mode with tk as the key and sqn+rnd as the nonce (here + means concatenation of byte strings). In this way the epd and mac fields are produced. Finally, the client encrypts tk using RSA-OAEP with the RSA public key of the server to produce the etk field.
+If the type is something other, then the content of the message is encripted by the public key of the server. That means the server executes the specific steps.
 
-When the server recieves the login request message, it checks the sequence number sqn in the header. Then it takes the last 256 bytes of the message as etk and decrypts it using RSA-OAEP with its RSA private key to obtain the temporary key tk. Once tk is obtained, it can verify the mac and decrypt the epd field using AES in GCM mode with tk as the key and sqn+rnd as the nonce (obtained from the message header).  The decrypted payload of the login request contains data that allows the authentication of the client to the server (see the description of the Login Protocol later).
+### Simple message to the other clients
 
-The server must respond with a login response (type `00 10`) message. For building the MTP message that carries the login response, it generates a fresh 6-byte random value r' using a cryptographic random number generator. It fills in the message header fields as follows:
-- ver = `01 00`
-- typ = `00 10`
-- len is calculated as the sum of the length of the header (16), the length of the encrypted payload (same as the length of the payload), and the length of the mac field (12)
-- sqn = `00 01` (i.e., this is the first message from the server to the client) 
-- rnd = r' (i.e., the 6-byte fresh random value generated before)
-- rsv = `00 00`
+```mermaid
+sequenceDiagram
+    client->>server: msg_req
+    server->>client_n_: msg_req
+    client_n->>server: msg_res
+    server->>client: msg_res
+```
 
-It then encrypts the payload of the login response and produces an  authentication tag on the message header and the encrypted payload using AES in GCM mode with tk as the key and sqn+rnd as the nonce. In this way the epd and mac fields are produced, and the login response is sent to the client.
+_init_req_
 
-The client and the server also send random values client_random and server_random, respectively, in the payload of the login request and login response messages, and they use these random numbers to create the final transfer key that they will use in the rest of the session. This will be described in the specification of the Login Protocol later. Hence, after the exchange of the login messages, if the login was successful, then the temporary key used to protect the login messages is discarded, and both the client and the server set the transfer key to the value derived from client_random and server_random. All subsequent messages will be protected with this final transfer key. The sequence numbers are not reset. 
+When the init request is send the sid is unknow and it is given by the server. Is the valu is 0 in the header.
 
-All subsequent MTP messages are produced in the same way as described above for the case of the login response message: 
-- the message header is produced with the appropriate message type (depending on the payload to be sent), the appropriate length, the next sending sequence number, and a fresh 6-byte random value, 
-- the encrypted payload and the mac fields are produced by processing the message header and the payload with AES in GCM mode using the final transfer key as the key and sqn+rnd as the nonce,
-- the message is sent and the inceremented sending sequence number is stored (as the sequence number of the last message sent).
+The format of the init request message (MTP type `02 00`) is the following:
 
-When such an MTP message is received, the receiving party 
-- verifies if the sequence number sqn in the message is larger than the last received sequence number, 
-- verifies the mac and decrypts the encrypted payload with AES in GCM mode using the final transfer key as the key and sqn+rnd as the nonce, and
-- if all verifications are successful, the stored receiving sequence number is set to the sqn value received in the message header.
+```
+<message_u1>'\n'
+<message_u2>'\n'
+.
+.
+.
+<message_un>'\n'
+```
 
-A message that does not pass all verifications must be silently discarded (no error message is sent in the MTP protocol) and the connection between the client and the server must be closed. Closing the connection is initiated by the receiving party that encountered the offending message.
+where `'\n'` is the new line character. Thus, the `'\n'` character serves as a delimiter that separates the fields of the message. The fields are specified as follows:
+
+- `<message_un>` the messega encripted with the nth user's public key.
+
+_msg_res_
+
+It's header contains the given suid.
+
+The format of the init response message (MTP type `02 10`) is the following:
+
+```
+<response>
+```
+
+where 
+
+- `<response>` is a UTF-8 text which is "OK", if the initialisation was successfull. If it wasn't, then the text is an error message.
+
+The server has all the specific clients messages. It can send the individually encripted messages to the correct clients. But only the clients can decrypt theri messages. The server's inner implementation handles the status of the individual users. The impelmentation can use the Status Protocol.
+
 
 ## Init Protocol
 The Init Protocol is responsible for the inicalisation of a new Session. The creator client sends the server the init request. 
 
-to each other and for setting up the final transfer key to be used by the MTP protocol to protect MTP messages. The server is authenticated implictly: it is assumed that the client knows the server's public key, and it encrypts a login request to the server using this public key. Hence, only the entity knowing the corresponding private key, i.e., supposedly the server, can decrypt and respond correctly to this login request. The client, on the other hand, authenticates itself explicitely with a username and password pair, which is sent to the server in the login request message. The server should not store client passwords in cleartext, but it should rather store password hashes, and verify the password in the incoming login request by hashing it and comparing it to the stored password hash of the user identified by the username in the login request. In addition, to prevent dictionary attacks on passwords, the server should use a secure password hashing algorithm, such as PBKDF2, scrypt, or Argon2.
-
 ### Message exchange
-The message exchange of the Login Protocol is shown in the figure below:
+The message exchange of the Init Protocol is shown in the figure below:
 
 ```mermaid
 sequenceDiagram
@@ -142,7 +154,6 @@ When the init request is send the sid is unknow and it is given by the server. I
 The format of the init request message (MTP type `00 00`) is the following:
 
 ```
-<public_key>\m
 <userid_1>'\n'
 <userid_2>'\n'
 .
@@ -154,7 +165,6 @@ The format of the init request message (MTP type `00 00`) is the following:
 where `'\n'` is the new line character. Thus, the `'\n'` character serves as a delimiter that separates the fields of the message. The fields are specified as follows:
 
 - `<userid_n>` the nth invited user's uniq identifier
-- `<public_key>` public key of the user
 
 _init_res_
 
@@ -181,13 +191,11 @@ The format of the init response message (MTP type `03 10`) is the following:
 
 ```
 <response>
-<public_key>
 ```
 
 where 
 
 - `<response>` is a UTF-8 text which is "Accept" or "Deny" based on the user's choice.
-- `<public_ket>` is the public key of the user, only if the response was Accept.
 
 ### Processing
 After the init request is recieved by the server the server creates the session. At first it generates the unique session ID. Then it sends the invite request messages to all the clients. When a clint respond, then if needed the server adds the client to the session. The data structure is based on the implementation. If everything was succesfull the server sends the init responst to the creator client. After that the session is live and it can be used.
@@ -196,7 +204,7 @@ After the init request is recieved by the server the server creates the session.
 The Close Protocol is responsible for closeing an open session.
 
 ### Message exchange
-The Close Protocol messages must be carried by the MTP protocol. The message exchange of the Commands Protocol is shown in the figure below:
+The Close Protocol messages must be carried by the MTP protocol. The message exchange of the Close Protocol is shown in the figure below:
 
 ```mermaid
 sequenceDiagram
@@ -208,6 +216,51 @@ The Close Protocol consists of 2 message transfers. First, the client must send 
 
 ### Message formats
 The Close Protocol close request has no content(epd), all of the needed informations are in the header(type, suid). The response has text, UTF-8 content. If the session has been closed succesfully it is "OK" else it is the error message why the session couldn't be closed.
+
+### Processing
+The processing of the closeing at the server is based on the implementation. It deletes all the data of the session except it has been closed. That is needed because in the future there shoudn't be an other session with the same ID, it could cause problems.
+
+At the clients there is no processing needed. If they want to use the session the server will notify them about the closing.
+
+
+## Satus Protocol
+The Status Protocol can ask the status of the server and clients.
+
+### Message exchange
+The Status Protocol messages must be carried by the MTP protocol. The message exchange of the Status Protocol is shown in the figure below:
+
+```mermaid
+sequenceDiagram
+    server->>client: status_req
+    client->>server: status_res
+```
+
+or
+
+```mermaid
+sequenceDiagram
+    client->>server: status_req
+    server->>client: status_res
+```
+
+The Status Protocol consists of 2 message transfers. First, the client must send a status request (status_req) to the server, and after that, the server must send a close response (status_res) to the client. It can be used the other way too.
+
+### Message formats
+_status_req_
+
+All the needed informations in the header.
+
+_status_res_
+
+The format of the init response message (MTP type `04 10`) is the following:
+
+```
+<response>
+```
+
+where 
+
+- `<response>` is a UTF-8 text which is the status. It can be the status of a client or the server. The value is "Online" or "Offline".
 
 ### Processing
 The processing of the closeing at the server is based on the implementation. It deletes all the data of the session except it has been closed. That is needed because in the future there shoudn't be an other session with the same ID, it could cause problems.
